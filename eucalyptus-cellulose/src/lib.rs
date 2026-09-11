@@ -4,6 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
     num::NonZero,
+    ops::Mul,
     ptr::NonNull,
     time::{Duration, Instant},
 };
@@ -27,9 +28,10 @@ use smithay_client_toolkit::{
         calloop_wayland_source::WaylandSource,
         client::{
             Connection,
+            Dispatch,
             Proxy,
             QueueHandle,
-            globals::registry_queue_init,
+            globals::{BindError, registry_queue_init},
             protocol::{
                 wl_keyboard::WlKeyboard,
                 wl_output::{Transform, WlOutput},
@@ -37,6 +39,13 @@ use smithay_client_toolkit::{
                 wl_seat::WlSeat,
                 wl_surface::WlSurface,
             },
+        },
+        protocols::wp::{
+            fractional_scale::v1::client::{
+                wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
+                wp_fractional_scale_v1::{self, WpFractionalScaleV1},
+            },
+            viewporter::client::{wp_viewport::WpViewport, wp_viewporter::WpViewporter},
         },
     },
     registry::{ProvidesRegistryState, RegistryState},
@@ -234,6 +243,7 @@ where
             Some(settings.anchor),
             settings.exclusive_zone.then_some(HEIGHT as _),
         )?;
+        let wp_viewport = self.wayland_client.get_viewport(layer_surface.wl_surface());
 
         let wgpu_surface = {
             let raw_display_handle = WaylandDisplayHandle::new(
@@ -263,45 +273,21 @@ where
             SurfaceState {
                 wl_surface: layer_surface.wl_surface().clone(),
                 layer_surface,
+                wp_viewport,
+                size: None,
+                scale: SurfaceScale::BufferScale(1),
+                buffer_size: None,
                 wgpu_surface,
                 renderer,
                 user_interface_cache: user_interface::Cache::new(),
                 view_port: None,
                 cursor: iced_core::mouse::Cursor::Unavailable,
                 pending_event: vec![],
-                iced_size: None,
                 exclusive_zone: settings.exclusive_zone,
             },
         );
 
         Ok(())
-    }
-    fn configure_surface(
-        &mut self,
-        surface: &WlSurface,
-        width: NonZero<u32>,
-        height: NonZero<u32>,
-    ) {
-        if let Some(it) = self.surfaces.get_mut(surface) {
-            it.view_port = Some(iced_graphics::Viewport::with_physical_size(
-                Size::new(width.get(), height.get()),
-                it.view_port
-                    .as_ref()
-                    .map_or(1.5, iced_graphics::Viewport::scale_factor),
-            ));
-
-            let mut wgpu_surface_configuration = it
-                .wgpu_surface
-                .get_default_config(&self.wgpu_adapter, width.get(), height.get())
-                .unwrap(); // TODO: remove unwrap
-
-            wgpu_surface_configuration.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
-
-            it.wgpu_surface
-                .configure(&self.wgpu_device, &wgpu_surface_configuration);
-
-            self.draw(surface);
-        }
     }
     fn draw(&mut self, surface: &WlSurface) {
         let Some((Some(width), Some(height))) =
@@ -366,16 +352,21 @@ where
 
         if let Some(bounds) = inspect_bounds.0
             && it
-                .iced_size
-                .is_none_or(|(_width, height)| height != bounds.height)
+                .size
+                .is_none_or(|(_width, height)| height.get() != bounds.height)
         {
             tracing::info!(?inspect_bounds, "bounds");
             it.layer_surface.set_size(0, bounds.height);
             if it.exclusive_zone {
                 it.layer_surface.set_exclusive_zone(bounds.height as _);
             }
-            it.iced_size = Some((bounds.width, bounds.height));
+            if let (Some(width), Some(height)) =
+                (NonZero::new(bounds.width), NonZero::new(bounds.height))
+            {
+                it.size = Some((width, height));
+            }
         }
+        // FIXME: call on_resize??
 
         user_interface.draw(
             &mut it.renderer,
@@ -389,7 +380,10 @@ where
             None,
             surface_texture.texture.format(),
             &texture_view,
-            &iced_graphics::Viewport::with_physical_size(Size::new(width.get(), height.get()), 1.0),
+            &iced_graphics::Viewport::with_physical_size(
+                Size::new(width.get() * it.scale, height.get() * it.scale),
+                it.scale.into(),
+            ),
         );
 
         surface_texture.present();
@@ -444,14 +438,18 @@ where
                 height,
             } => {
                 if let Some(it) = self.surfaces.get_mut(&wl_surface) {
+                    it.size = Some((width, height));
+
+                    it.buffer_size = Some((width.get() * it.scale, height.get() * it.scale));
                     it.pending_event.push(iced_core::Event::Window(
                         iced_core::window::Event::Resized(Size::new(
                             width.get() as _,
                             height.get() as _,
                         )),
                     ));
+                    it.on_resize(&self.wgpu_adapter, &self.wgpu_device);
                 }
-                self.configure_surface(&wl_surface, width, height);
+                self.draw(&wl_surface);
             }
             WaylandEvent::SurfaceFrame(surface) => {
                 if let Some(it) = self.surfaces.get_mut(&surface) {
@@ -463,6 +461,17 @@ where
             }
             WaylandEvent::SurfaceClose(surface) => {
                 self.surfaces.remove(&surface);
+            }
+            WaylandEvent::SurfaceScale { wl_surface, scale } => {
+                if let Some(it) = self.surfaces.get_mut(&wl_surface) {
+                    it.scale = scale;
+
+                    if let Some((width, height)) = it.size {
+                        it.buffer_size = Some((width.get() * scale, height.get() * scale));
+                        it.on_resize(&self.wgpu_adapter, &self.wgpu_device);
+                    };
+                }
+                // self.draw(&wl_surface);
             }
             WaylandEvent::PointerEvents(events) => {
                 for event in events {
@@ -600,14 +609,55 @@ where
 struct SurfaceState {
     wl_surface: WlSurface,
     layer_surface: LayerSurface,
+    wp_viewport: WpViewport,
+    size: Option<(NonZero<u32>, NonZero<u32>)>,
+    scale: SurfaceScale,
+    buffer_size: Option<(u32, u32)>,
     wgpu_surface: wgpu::Surface<'static>,
     renderer: iced_wgpu::Renderer,
     user_interface_cache: user_interface::Cache,
     view_port: Option<iced_graphics::Viewport>,
     cursor: iced_core::mouse::Cursor,
     pending_event: Vec<iced_core::Event>,
-    iced_size: Option<(u32, u32)>,
     exclusive_zone: bool,
+}
+
+impl SurfaceState {
+    fn on_resize(&mut self, wgpu_adapter: &wgpu::Adapter, wgpu_device: &wgpu::Device) {
+        if let Some((width, height)) = self.size {
+            match self.scale {
+                SurfaceScale::FractionalScale(scale) => {
+                    self.wl_surface.set_buffer_scale(1);
+                    self.wp_viewport
+                        .set_destination(width.get() as _, height.get() as _);
+                }
+                SurfaceScale::BufferScale(scale) => {
+                    self.wl_surface.set_buffer_scale(scale);
+                    self.wp_viewport.set_destination(-1, -1);
+                }
+            }
+        };
+        if let Some((buffer_width, buffer_height)) = self.buffer_size {
+            self.pending_event
+                .push(iced_core::Event::Window(iced_core::window::Event::Resized(
+                    Size::new(buffer_width as _, buffer_height as _),
+                )));
+            self.view_port = Some(iced_graphics::Viewport::with_physical_size(
+                Size::new(buffer_width, buffer_height),
+                self.scale.into(),
+            ));
+
+            let mut wgpu_surface_configuration = self
+                .wgpu_surface
+                .get_default_config(wgpu_adapter, buffer_width, buffer_height)
+                .unwrap(); // TODO: remove unwrap
+
+            wgpu_surface_configuration.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
+
+            self.wgpu_surface
+                .configure(wgpu_device, &wgpu_surface_configuration);
+        };
+    }
 }
 
 struct Clipboard;
@@ -627,8 +677,8 @@ struct WaylandClient {
     registry_state: RegistryState,
     output_state: OutputState,
     seat_state: SeatState,
-    // TODO: fractional_scale
-    // fractional_scale_manager: WpFractionalScaleManagerV1,
+    fractional_scale_manager: Option<WpFractionalScaleManagerV1>,
+    viewporter: WpViewporter,
     pointer: Option<WlPointer>,
     compositor_state: CompositorState,
     xdg_shell: XdgShell,
@@ -654,6 +704,10 @@ impl WaylandClient {
         let seat_state = SeatState::new(&globals, &qh);
         let xdg_shell = XdgShell::bind(&globals, &qh)?;
         let layer_shell = LayerShell::bind(&globals, &qh)?;
+        let fractional_scale_manager = globals
+            .bind::<WpFractionalScaleManagerV1, _, _>(&qh, 1..=1, ())
+            .ok();
+        let viewporter = globals.bind::<WpViewporter, _, _>(&qh, 1..=1, ())?;
 
         Ok((
             Self {
@@ -664,6 +718,8 @@ impl WaylandClient {
                 output_state,
                 seat_state,
                 compositor_state,
+                fractional_scale_manager,
+                viewporter,
                 pointer: None,
                 xdg_shell,
                 layer_shell,
@@ -683,6 +739,10 @@ impl WaylandClient {
         exclusive_zone: Option<i32>,
     ) -> Result<LayerSurface, Box<dyn std::error::Error>> {
         let wl_surface = self.compositor_state.create_surface(&self.queue_handle);
+        let fractional_scale = self
+            .fractional_scale_manager
+            .as_ref()
+            .map(|x| x.get_fractional_scale(&wl_surface, &self.queue_handle, wl_surface.clone()));
         let layer_surface = self.layer_shell.create_layer_surface(
             &self.queue_handle,
             wl_surface.clone(),
@@ -712,6 +772,10 @@ impl WaylandClient {
             })?;
 
         Ok(layer_surface)
+    }
+    fn get_viewport(&mut self, surface: &WlSurface) -> WpViewport {
+        self.viewporter
+            .get_viewport(&surface, &self.queue_handle, surface.clone())
     }
 }
 
@@ -785,7 +849,57 @@ enum WaylandEvent {
     },
     SurfaceFrame(WlSurface),
     SurfaceClose(WlSurface),
+    SurfaceScale {
+        wl_surface: WlSurface,
+        scale: SurfaceScale,
+    },
     PointerEvents(Vec<PointerEvent>),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SurfaceScale {
+    FractionalScale(u32),
+    BufferScale(i32),
+}
+
+impl Mul<SurfaceScale> for u32 {
+    type Output = Self;
+
+    fn mul(self, rhs: SurfaceScale) -> Self::Output {
+        match rhs {
+            SurfaceScale::FractionalScale(scale) => (self as f64 * (scale as f64 / 120.0)) as _,
+            SurfaceScale::BufferScale(scale) => self * scale as u32,
+        }
+    }
+}
+
+impl Mul<SurfaceScale> for i32 {
+    type Output = Self;
+
+    fn mul(self, rhs: SurfaceScale) -> Self::Output {
+        match rhs {
+            SurfaceScale::FractionalScale(scale) => (self as f64 * (scale as f64 / 120.0)) as _,
+            SurfaceScale::BufferScale(scale) => self * scale,
+        }
+    }
+}
+
+impl Into<f64> for SurfaceScale {
+    fn into(self) -> f64 {
+        match self {
+            SurfaceScale::FractionalScale(scale) => scale as f64 / 120.0,
+            SurfaceScale::BufferScale(scale) => scale as _,
+        }
+    }
+}
+
+impl Into<f32> for SurfaceScale {
+    fn into(self) -> f32 {
+        match self {
+            SurfaceScale::FractionalScale(scale) => scale as f32 / 120.0,
+            SurfaceScale::BufferScale(scale) => scale as _,
+        }
+    }
 }
 
 smithay_client_toolkit::delegate_registry!(WaylandClient);
@@ -820,9 +934,13 @@ impl CompositorHandler for WaylandClient {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _surface: &WlSurface,
-        _new_factor: i32,
+        surface: &WlSurface,
+        new_factor: i32,
     ) {
+        let _ = futures::executor::block_on(self.event_tx.send(WaylandEvent::SurfaceScale {
+            wl_surface: surface.clone(),
+            scale: SurfaceScale::BufferScale(new_factor),
+        }));
     }
 
     fn transform_changed(
@@ -940,6 +1058,73 @@ impl LayerShellHandler for WaylandClient {
                     width,
                     height,
                 }));
+        }
+    }
+}
+
+impl Dispatch<WpFractionalScaleManagerV1, ()> for WaylandClient {
+    fn event(
+        state: &mut Self,
+        proxy: &WpFractionalScaleManagerV1,
+        event: <WpFractionalScaleManagerV1 as Proxy>::Event,
+        data: &(),
+        conn: &Connection,
+        qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            _ => (),
+        }
+    }
+}
+
+impl Dispatch<WpFractionalScaleV1, WlSurface> for WaylandClient {
+    fn event(
+        state: &mut Self,
+        proxy: &WpFractionalScaleV1,
+        event: <WpFractionalScaleV1 as Proxy>::Event,
+        data: &WlSurface,
+        conn: &Connection,
+        qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            wp_fractional_scale_v1::Event::PreferredScale { scale } => {
+                let _ =
+                    futures::executor::block_on(state.event_tx.send(WaylandEvent::SurfaceScale {
+                        wl_surface: data.clone(),
+                        scale: SurfaceScale::FractionalScale(scale),
+                    }));
+            }
+            _ => (),
+        }
+    }
+}
+
+impl Dispatch<WpViewporter, ()> for WaylandClient {
+    fn event(
+        state: &mut Self,
+        proxy: &WpViewporter,
+        event: <WpViewporter as Proxy>::Event,
+        data: &(),
+        conn: &Connection,
+        qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            _ => (),
+        }
+    }
+}
+
+impl Dispatch<WpViewport, WlSurface> for WaylandClient {
+    fn event(
+        state: &mut Self,
+        proxy: &WpViewport,
+        event: <WpViewport as Proxy>::Event,
+        data: &WlSurface,
+        conn: &Connection,
+        qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            _ => (),
         }
     }
 }
