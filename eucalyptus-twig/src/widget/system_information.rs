@@ -6,7 +6,7 @@ use std::{
 
 use eucalyptus_cellulose::{Element, task::{Task, TaskExt}};
 use heapless::HistoryBuf;
-use iced_core::{Font, Length, Point};
+use iced_core::{Font, Point};
 use iced_futures::Subscription;
 use iced_widget::canvas::{LineCap, Stroke};
 use serde::Deserialize;
@@ -77,50 +77,49 @@ impl Widget for SystemInformation {
     fn view(&self) -> Element<'_, Self::Message> {
         const CHART_WIDTH: u32 = 64;
 
+        let thing = |chart, text| iced_widget::stack![iced_widget::container(text).center_x(CHART_WIDTH)].push_under(chart);
+
         iced_widget::row(
             [
                 self.cpu_usage_history.recent().map(|cpu_usage| {
                     iced_widget::row![
-                        iced_widget::text("\u{e322}").font(Font::with_name("Material Symbols Rounded")),
-                        iced_widget::stack![
+                        iced_widget::text("\u{e322}")
+                            .font(Font::with_name("Material Symbols Rounded")),
+                        thing(
                             iced_widget::canvas(LineChart {
                                 history: &self.cpu_usage_history,
                                 scale: 1.0,
-                            })
-                            .width(CHART_WIDTH)
-                            .height(Length::Fill),
-                            iced_widget::center(iced_widget::text!("{:.0}%", (cpu_usage * 100.0).round())),
-                        ],
+                            }),
+                            iced_widget::text!("{:.0}%", (cpu_usage * 100.0).round()),
+                        ),
                     ]
                     .into()
                 }),
                 self.memory_usage_history.recent().map(|memory_usage| {
                     iced_widget::row![
-                        iced_widget::text("\u{f7a3}").font(Font::with_name("Material Symbols Rounded")),
-                        iced_widget::stack![
+                        iced_widget::text("\u{f7a3}")
+                            .font(Font::with_name("Material Symbols Rounded")),
+                        thing(
                             iced_widget::canvas(LineChart {
                                 history: &self.memory_usage_history,
                                 scale: 1.0,
-                            })
-                            .width(CHART_WIDTH)
-                            .height(Length::Fill),
-                            iced_widget::center(iced_widget::text!("{:.0}%", (memory_usage * 100.0).round())),
-                        ],
+                            }),
+                            iced_widget::text!("{:.0}%", (memory_usage * 100.0).round()),
+                        ),
                     ]
                     .into()
                 }),
                 self.temperature_history.recent().map(|temperature| {
                     iced_widget::row![
-                        iced_widget::text("\u{f076}").font(Font::with_name("Material Symbols Rounded")),
-                        iced_widget::stack![
+                        iced_widget::text("\u{f076}")
+                            .font(Font::with_name("Material Symbols Rounded")),
+                        thing(
                             iced_widget::canvas(LineChart {
                                 history: &self.temperature_history,
                                 scale: 0.01,
-                            })
-                            .width(CHART_WIDTH)
-                            .height(Length::Fill),
-                            iced_widget::center(iced_widget::text!("{:.0}\u{b0}C", temperature.round())),
-                        ],
+                            }),
+                            iced_widget::text!("{:.0}\u{b0}C", temperature.round()),
+                        ),
                     ]
                     .into()
                 }),
