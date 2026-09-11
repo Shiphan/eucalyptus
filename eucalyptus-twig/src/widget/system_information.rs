@@ -4,14 +4,17 @@ use std::{
     time::Duration,
 };
 
-use eucalyptus_cellulose::{Element, task::{Task, TaskExt}};
+use eucalyptus_cellulose::{
+    Element,
+    task::{Task, TaskExt},
+};
 use heapless::HistoryBuf;
 use iced_core::{Font, Point};
 use iced_futures::Subscription;
 use iced_widget::canvas::{LineCap, Stroke};
 use serde::Deserialize;
 
-use crate::{widget::{Widget, WidgetPadding}};
+use crate::widget::{Widget, WidgetPadding};
 
 // TODO: Replace heapless::HistoryBuf with something that can be configured by user (runtime allocated)
 const HISTORY_LEN: usize = 16;
@@ -133,23 +136,30 @@ impl Widget for SystemInformation {
     }
 
     fn subscription(&self) -> impl Into<Subscription<Self::Message>> {
-        Subscription::run_with((self.temperature_hardware_name.clone(), self.hwmon_was_here, self.update), |data| {
-            let (temperature_hardware_name, hwmon_was_here, update) = data.clone();
-            iced_runtime::task::sipper(async move |mut tx| {
-                loop {
-                    tx.send(Message::Update {
-                        cpu_statistics: CpuStatistics::get(),
-                        memory_info: MemoryInfo::get(),
-                        hardware_monitoring: HardwareMonitoring::get(
-                            &temperature_hardware_name,
-                            hwmon_was_here,
-                        ),
-                    })
-                    .await;
-                    tokio::time::sleep(update).await;
-                }
-            })
-        })
+        Subscription::run_with(
+            (
+                self.temperature_hardware_name.clone(),
+                self.hwmon_was_here,
+                self.update,
+            ),
+            |data| {
+                let (temperature_hardware_name, hwmon_was_here, update) = data.clone();
+                iced_runtime::task::sipper(async move |mut tx| {
+                    loop {
+                        tx.send(Message::Update {
+                            cpu_statistics: CpuStatistics::get(),
+                            memory_info: MemoryInfo::get(),
+                            hardware_monitoring: HardwareMonitoring::get(
+                                &temperature_hardware_name,
+                                hwmon_was_here,
+                            ),
+                        })
+                        .await;
+                        tokio::time::sleep(update).await;
+                    }
+                })
+            },
+        )
     }
 }
 
@@ -177,8 +187,9 @@ impl<Message> iced_widget::canvas::Program<Message> for LineChart<'_> {
 
         for (index, &record) in self.history.oldest_ordered().rev().enumerate() {
             let point = Point::new(
-                frame.width() / (self.history.capacity() - 1) as f32 * (self.history.capacity() - 1 - index) as f32,
-                frame.height() * (1.0 - record * self.scale)
+                frame.width() / (self.history.capacity() - 1) as f32
+                    * (self.history.capacity() - 1 - index) as f32,
+                frame.height() * (1.0 - record * self.scale),
             );
             if index == 0 {
                 line.move_to(point);
@@ -187,10 +198,13 @@ impl<Message> iced_widget::canvas::Program<Message> for LineChart<'_> {
             }
         }
 
-        frame.stroke(&line.build(), Stroke::default()
-            .with_width(2.0)
-            .with_color(theme.palette().text.scale_alpha(0.5))
-            .with_line_cap(LineCap::Round));
+        frame.stroke(
+            &line.build(),
+            Stroke::default()
+                .with_width(2.0)
+                .with_color(theme.palette().text.scale_alpha(0.5))
+                .with_line_cap(LineCap::Round),
+        );
 
         vec![frame.into_geometry()]
     }
