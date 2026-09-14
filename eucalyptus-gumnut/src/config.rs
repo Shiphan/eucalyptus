@@ -1,8 +1,8 @@
 use std::{
     borrow::Cow,
-    cell::LazyCell,
     error::Error,
     path::{Path, PathBuf},
+    sync::LazyLock,
 };
 
 use serde::Deserialize;
@@ -16,7 +16,7 @@ pub struct Config {
     pub item: ItemConfig,
 }
 
-const XDG_CONFIG_HOME: LazyCell<Cow<'static, Path>> = LazyCell::new(|| {
+static XDG_CONFIG_HOME: LazyLock<Cow<'static, Path>> = LazyLock::new(|| {
     if let Some(xdg_config_home) = std::env::var_os("XDG_CONFIG_HOME") {
         Cow::Owned(PathBuf::from(xdg_config_home))
     } else if let Some(home) = std::env::home_dir() {
@@ -26,12 +26,12 @@ const XDG_CONFIG_HOME: LazyCell<Cow<'static, Path>> = LazyCell::new(|| {
     }
 });
 
-impl Config {
-    pub const PATH: LazyCell<PathBuf> =
-        LazyCell::new(|| XDG_CONFIG_HOME.join("eucalyptus-gumnut/eucalyptus-gumnut.toml"));
+pub static DEFAULT_PATH: LazyLock<PathBuf> =
+    LazyLock::new(|| XDG_CONFIG_HOME.join("eucalyptus-gumnut/eucalyptus-gumnut.toml"));
 
+impl Config {
     pub fn load() -> Result<Self, Box<dyn Error>> {
-        let config_content = std::fs::read(Self::PATH.as_path())?;
+        let config_content = std::fs::read(DEFAULT_PATH.as_path())?;
         Ok(toml::from_slice(&config_content)?)
     }
 }

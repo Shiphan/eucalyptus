@@ -1,7 +1,7 @@
 use std::{
-    cell::LazyCell,
     env,
     path::{Path, PathBuf},
+    sync::LazyLock,
     time::Duration,
 };
 
@@ -20,7 +20,7 @@ use crate::{
     item::{self, Item, ItemKind, power_profile::PowerProfile},
 };
 
-pub const SOCKET_PATH: LazyCell<PathBuf> = LazyCell::new(|| {
+pub static SOCKET_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
     let socket_path = Path::new("eucalyptus-gumnut/daemon.sock");
     match env::var_os("XDG_RUNTIME_DIR") {
         Some(runtime_dir) => Path::new(&runtime_dir).join(socket_path),
@@ -33,7 +33,7 @@ pub const SOCKET_PATH: LazyCell<PathBuf> = LazyCell::new(|| {
 pub fn start() {
     let config = match Config::load() {
         Ok(x) => {
-            tracing::info!("Load config from {:?}", crate::config::Config::PATH);
+            tracing::info!("Load config from {:?}", crate::config::DEFAULT_PATH);
             x
         }
         Err(e) => {
