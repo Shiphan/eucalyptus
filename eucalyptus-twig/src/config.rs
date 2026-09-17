@@ -1,5 +1,6 @@
 use std::{env, error::Error, fs, path::PathBuf};
 
+use iced_core::theme::Base;
 use serde::Deserialize;
 
 use crate::widget::{WidgetConfig, WidgetKind};
@@ -7,6 +8,8 @@ use crate::widget::{WidgetConfig, WidgetKind};
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    #[serde(deserialize_with = "deserialize_theme")]
+    pub theme: iced_core::Theme,
     pub left: Box<[WidgetKindGroup]>,
     pub middle: Box<[WidgetKindGroup]>,
     pub right: Box<[WidgetKindGroup]>,
@@ -16,6 +19,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            theme: iced_core::Theme::KanagawaWave,
             left: Box::new([
                 // WidgetKind::PowerMenu.into(),
                 WidgetKind::Power.into(),
@@ -61,6 +65,24 @@ impl Config {
         let config_content = fs::read(path)?;
         Ok(toml::from_slice(&config_content)?)
     }
+}
+
+fn deserialize_theme<'de, D>(deserializer: D) -> Result<iced_core::Theme, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: &str = serde::Deserialize::deserialize(deserializer)?;
+    iced_core::Theme::ALL
+        .iter()
+        .find(|theme| s == theme.name())
+        .cloned()
+        .ok_or_else(|| {
+            serde::de::Error::custom(format_args!(
+                "unknown theme `{}`, expected one of {:?}",
+                s,
+                iced_core::Theme::ALL
+            ))
+        })
 }
 
 #[derive(Deserialize)]

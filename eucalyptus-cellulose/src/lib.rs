@@ -95,6 +95,7 @@ where
     Message: Send + 'static,
     State: self::State,
 {
+    settings: Settings,
     state: State,
     boot_task: Task<Message>,
     wayland_event_loop: EventLoop<'a, WaylandClient>,
@@ -121,7 +122,11 @@ where
     Message: Send + 'static,
     State: self::State<Message = Message>,
 {
-    pub fn new(state: State, boot_task: Task<Message>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(
+        state: State,
+        boot_task: Task<Message>,
+        settings: Settings,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let (wayland_event_tx, wayland_event_rx) = mpsc::unbounded();
         let (wayland_client, wayland_event_loop) = WaylandClient::new(wayland_event_tx)?;
 
@@ -150,6 +155,7 @@ where
         );
 
         Ok(Self {
+            settings,
             state,
             boot_task,
             wayland_event_loop,
@@ -370,7 +376,7 @@ where
 
         user_interface.draw(
             &mut it.renderer,
-            &Theme::KanagawaWave,
+            &self.settings.theme,
             &iced_core::renderer::Style::default(),
             it.cursor,
         );
@@ -533,6 +539,10 @@ where
 
         Ok(())
     }
+}
+
+pub struct Settings {
+    pub theme: iced_core::Theme,
 }
 
 pub trait State: Sized {

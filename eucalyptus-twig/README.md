@@ -11,6 +11,8 @@ Eucalyptus Twig read a toml file at `$XDG_CONFIG_HOME/eucalyptus-twig/eucalyptus
 
 An example would be:
 ```toml
+theme = "Kanagawa Wave"
+
 left = [
   "Power",
   "Clock",

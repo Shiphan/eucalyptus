@@ -43,10 +43,16 @@ pub fn start() {
     };
 
     let (state, task) = State::new(config);
-    eucalyptus_cellulose::Application::new(state, task)
-        .unwrap()
-        .run()
-        .unwrap();
+    eucalyptus_cellulose::Application::new(
+        state,
+        task,
+        eucalyptus_cellulose::Settings {
+            theme: iced_core::Theme::KanagawaWave,
+        },
+    )
+    .unwrap()
+    .run()
+    .unwrap();
 }
 
 const WIDTH: f32 = 600.0;

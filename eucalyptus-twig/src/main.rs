@@ -66,8 +66,9 @@ fn main() {
         }
     };
 
+    let theme = config.theme.clone();
     let (state, task) = State::new(config);
-    eucalyptus_cellulose::Application::new(state, task)
+    eucalyptus_cellulose::Application::new(state, task, eucalyptus_cellulose::Settings { theme })
         .unwrap()
         .run()
         .unwrap();
