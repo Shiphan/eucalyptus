@@ -22,6 +22,7 @@
         buildInputs = with pkgs; [
           fenix.packages.${system}.default.rustfmt
           clippy
+          mdbook
 
           libxkbcommon.dev
           fontconfig.dev

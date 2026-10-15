@@ -1,0 +1,9 @@
+[book]
+title = "Eucalyptus"
+authors = ["Shiphan"]
+language = "en"
+
+[output.html]
+git-repository-url = "https://github.com/Shiphan/eucalyptus"
+git-repository-icon = "fab-git-alt"
+site-url = "/eucalyptus/"
